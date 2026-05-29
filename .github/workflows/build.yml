@@ -1,0 +1,112 @@
+name: Build Patched Kernel
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup magiskboot (x86_64)
+        run: |
+          MAGISK_URL="https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk"
+          wget -q "$MAGISK_URL" -O magisk.apk
+          unzip -p magisk.apk lib/x86_64/libmagiskboot.so > magiskboot
+          chmod +x magiskboot
+          sudo mv magiskboot /usr/local/bin/magiskboot
+          magiskboot --version || echo "magiskboot ready"
+
+      - name: Patch boot.img with new kernel
+        run: |
+          mkdir -p work output
+          cp patchbootstock/boot.img work/boot.img
+          cd work
+
+          # فك boot.img الستوك
+          magiskboot unpack boot.img
+
+          echo "=== محتويات بعد الفك ==="
+          ls -lh
+
+          # نحط الـ Image الجديدة مباشرة
+          # magiskboot repack هيضغطها تلقائياً بـ lz4_legacy من الـ header
+          cp ../Image kernel
+
+          echo "=== kernel الجديد ==="
+          ls -lh kernel
+
+          # إعادة تجميع
+          magiskboot repack boot.img patched_boot.img
+
+          echo "✅ patched_boot.img جاهز"
+          ls -lh patched_boot.img
+
+      - name: Verify patched boot.img
+        run: |
+          mkdir -p verify
+          cp work/patched_boot.img verify/
+          cd verify
+
+          magiskboot unpack patched_boot.img
+
+          echo "=== التحقق من الـ patched boot ==="
+          echo "KERNEL_SZ الستوك:  18833091"
+          PATCH_SZ=$(stat -c%s kernel)
+          echo "KERNEL_SZ المعدل: $PATCH_SZ"
+
+          # فك الضغط ومقارنة بالـ Image الأصلي
+          magiskboot decompress kernel kernel_raw 2>&1 || cp kernel kernel_raw
+
+          ORIG_MD5=$(md5sum ../Image | awk '{print $1}')
+          PATCH_MD5=$(md5sum kernel_raw | awk '{print $1}')
+          echo "MD5 Image الأصلي:   $ORIG_MD5"
+          echo "MD5 kernel المفكوك: $PATCH_MD5"
+
+          if [ "$ORIG_MD5" = "$PATCH_MD5" ]; then
+            echo "✅ الكيرنال متطابق - التعديل صح"
+          else
+            echo "❌ الكيرنال مختلف - فيه مشكلة!"
+            exit 1
+          fi
+
+      - name: Build AnyKernel3 zip
+        run: |
+          mkdir -p ak3_package/tools ak3_package/META-INF
+
+          cp anykernel.sh  ak3_package/
+          cp banner        ak3_package/
+          cp LICENSE       ak3_package/
+          cp Image         ak3_package/
+          cp -r tools/.    ak3_package/tools/
+          cp -r META-INF/. ak3_package/META-INF/
+
+          cd ak3_package
+          ZIP_NAME="AnyKernel3-patched-$(date +%Y%m%d-%H%M).zip"
+          zip -r9 "../output/${ZIP_NAME}" .
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+          echo "✅ ${ZIP_NAME} تم بنجاح"
+
+      - name: Prepare output
+        run: |
+          cp work/patched_boot.img output/
+          ls -lh output/
+
+      - name: Upload patched_boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched_boot
+          path: output/patched_boot.img
+          retention-days: 7
+
+      - name: Upload AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3_zip
+          path: output/*.zip
+          retention-days: 7
