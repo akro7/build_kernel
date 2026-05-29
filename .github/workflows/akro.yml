@@ -1,4 +1,4 @@
-name: Build Patched Kernel
+name: Build Patched Kernel 1
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
           sudo mv magiskboot /usr/local/bin/magiskboot
           magiskboot --version || echo "magiskboot ready"
 
-      - name: Patch boot.img with new kernel
+      - name: boot.img with new kernel
         run: |
           mkdir -p work output
           
