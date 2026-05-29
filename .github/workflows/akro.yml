@@ -1,0 +1,123 @@
+name: Build Patched Kernel
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup magiskboot (x86_64)
+        run: |
+          MAGISK_URL="https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk"
+          wget -q "$MAGISK_URL" -O magisk.apk
+          unzip -p magisk.apk lib/x86_64/libmagiskboot.so > magiskboot
+          chmod +x magiskboot
+          sudo mv magiskboot /usr/local/bin/magiskboot
+          magiskboot --version || echo "magiskboot ready"
+
+      - name: Patch boot.img with new kernel
+        run: |
+          mkdir -p work output
+          
+          # التأكد من وجود ملف الـ boot.img الستوك
+          if [ ! -f "patchbootstock/boot.img" ]; then
+            echo "❌ ملف patchbootstock/boot.img غير موجود!"
+            exit 1
+          fi
+          
+          cp patchbootstock/boot.img work/boot.img
+          cd work
+
+          # فك boot.img الستوك
+          magiskboot unpack boot.img
+
+          echo "=== محتويات بعد الفك ==="
+          ls -lh
+
+          # اختيار ملف الـ Image المناسب وتسميته كـ kernel للـ repack
+          # يفضل استخدام Bypass-Image إذا كان هو الكيرنال المعدل الجاهز
+          if [ -f "../Bypass-Image" ]; then
+            echo "ℹ️ سيتم استخدام Bypass-Image لتعديل الـ boot.img"
+            cp ../Bypass-Image kernel
+          else
+            cp ../Image kernel
+          fi
+
+          echo "=== kernel الجديد ==="
+          ls -lh kernel
+
+          # إعادة تجميع الـ boot.img
+          magiskboot repack boot.img patched_boot.img
+
+          echo "✅ patched_boot.img جاهز"
+          ls -lh patched_boot.img
+
+      - name: Verify patched boot.img
+        run: |
+          if [ ! -f "work/patched_boot.img" ]; then
+            echo "❌ فشل إنشاء patched_boot.img"
+            exit 1
+          fi
+          echo "✅ تم التحقق من وجود ملف patched_boot.img بنجاح."
+
+      - name: Build AnyKernel3 zip
+        run: |
+          # إنشاء مجلد البناء للحزمة وتجهيز المجلدات الداخلية
+          mkdir -p ak3_package/tools ak3_package/META-INF
+
+          # 1. نسخ الملفات النصية والبرمجية الأساسية المتواجدة في جذر المشروع
+          [ -f anykernel.sh ]  && cp anykernel.sh  ak3_package/
+          [ -f banner ]        && cp banner        ak3_package/
+          [ -f LICENSE ]       && cp LICENSE       ak3_package/
+          [ -f bypass.patch ]  && cp bypass.patch  ak3_package/
+
+          # 2. نسخ ملفات الكيرنال (الملف العادي وملف التخطي) داخل حزمة الـ zip
+          [ -f Image ]         && cp Image         ak3_package/
+          [ -f Bypass-Image ]  && cp Bypass-Image  ak3_package/
+
+          # 3. نسخ المجلدات الفرعية بكامل محتوياتها وأدواتها (Tools & META-INF)
+          if [ -d tools ]; then
+            cp -r tools/. ak3_package/tools/
+          fi
+
+          if [ -d META-INF ]; then
+            cp -r META-INF/. ak3_package/META-INF/
+          fi
+
+          # تأكيد نقل الملفات داخل حزمة الـ AnyKernel
+          echo "=== محتويات حزمة AnyKernel3 قبل الضغط ==="
+          ls -R ak3_package
+
+          # 4. ضغط الحزمة كاملة
+          cd ak3_package
+          ZIP_NAME="AnyKernel3-patched-$(date +%Y%m%d-%H%M).zip"
+          zip -r9 "../output/${ZIP_NAME}" .
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+          echo "✅ ${ZIP_NAME} تم تجميعه بنجاح"
+
+      - name: Prepare output
+        run: |
+          cp work/boot.img output/
+          echo "=== الملفات النهائية الجاهزة للرفع ==="
+          ls -lh output/
+
+      - name: Upload boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel_boot
+          path: output/boot.img
+          retention-days: 7
+
+      - name: Upload AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3_zip
+          path: output/*.zip
+          retention-days: 7
