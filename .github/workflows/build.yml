@@ -1,0 +1,94 @@
+name: Build Patched Kernel
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # ─── 1. تحميل magiskboot نسخة x86_64 من Magisk ──────────────
+      - name: Setup magiskboot (x86_64)
+        run: |
+          # تحميل أحدث إصدار Magisk APK واستخراج magiskboot منه
+          MAGISK_URL="https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk"
+          wget -q "$MAGISK_URL" -O magisk.apk
+          unzip -p magisk.apk lib/x86_64/libmagiskboot.so > magiskboot
+          chmod +x magiskboot
+          sudo mv magiskboot /usr/local/bin/magiskboot
+          magiskboot --version || echo "magiskboot ready"
+
+      # ─── 2. فك ضغط boot.zip واستبدال الكيرنال ────────────────────
+      - name: Unzip boot and patch with new kernel
+        run: |
+          mkdir -p work output
+          
+          # فك ضغط الملف المضغوط من مجلد patchbootstock إلى مجلد العمل
+          unzip patchbootstock/boot.zip -d work/
+          
+          cd work
+          
+          # التأكد من اسم الملف المفكوك (إذا كان اسمه مختلفاً سيبحث السكريبت عن أي ملف .img ويسميه boot.img)
+          if [ ! -f boot.img ]; then
+            mv *.img boot.img 2>/dev/null || echo "No img file found"
+          fi
+
+          # فك boot.img الستوك باستخدام magiskboot
+          magiskboot unpack boot.img
+
+          echo "=== محتويات بعد الفك ==="
+          ls -lh
+
+          # استبدال الكيرنال بالـ Image المعدل الموجود في الروت الرئيسي للـ repo
+          cp ../Image kernel
+
+          # إعادة تجميع boot.img المعدل
+          magiskboot repack boot.img patched_boot.img
+
+          echo "✅ patched_boot.img تم بنجاح"
+          ls -lh patched_boot.img
+
+      # ─── 3. تجميع AnyKernel3 zip للـ recovery ───────────────────
+      - name: Build AnyKernel3 zip
+        run: |
+          mkdir -p ak3_package/tools ak3_package/META-INF
+
+          cp anykernel.sh  ak3_package/
+          cp banner        ak3_package/
+          cp LICENSE       ak3_package/
+          cp Image         ak3_package/
+          cp -r tools/.    ak3_package/tools/
+          cp -r META-INF/. ak3_package/META-INF/
+
+          cd ak3_package
+          ZIP_NAME="AnyKernel3-patched-$(date +%Y%m%d-%H%M).zip"
+          zip -r9 "../output/${ZIP_NAME}" .
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+          echo "✅ ${ZIP_NAME} تم بنجاح"
+
+      # ─── 4. نقل patched_boot.img للـ output ─────────────────────
+      - name: Prepare output
+        run: |
+          cp work/patched_boot.img output/
+          ls -lh output/
+
+      # ─── 5. رفع النتائج ──────────────────────────────────────────
+      - name: Upload patched_boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched_boot
+          path: output/patched_boot.img
+          retention-days: 30
+
+      - name: Upload AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3_zip
+          path: output/*.zip
+          retention-days: 30
