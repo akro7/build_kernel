@@ -39,30 +39,36 @@ jobs:
           rm -rf patchbootstock/boot.img.part* patchbootstock/boot.img
 
           sudo apt-get update -qq
-          sudo apt-get install -y -qq aria2 unzip tar
+          sudo apt-get install -y -qq aria2 p7zip-full tar unzip lz4
 
           ROM_URL="https://xm04.space/MyUrLiwlJzsOOD0BMz8GIywRNEEOFTAINBUpIzE/KzUOPDJBGyEELhsQMDUxIS0eGz8dLzE/Hx4OFQRBDjwfDDQ8Kw8bFQQeNBIuAA4KBCYzPC0wMQofHg4KHwwxED0kQh4HLycSIjgnAx0vJxIXFQMyNR8QMjUfDhEbCCwKMhwbEQAMOQoEJjwRLSM5FTQtLDA9JEIeBy8nEiI4JwMdLycSFxUDMjUfEDI1HzweB0EnAjlBBQMJEQ4CHUEnFh0vJxYaHCcDQi8nBD0gMSE9ATkVABwfIQdBGxUrChsWLSknEBcuGz8IOhwWCT8FAyceHxYUEScWKRM="
 
-          aria2c -x 16 -s 16 -k 1M --console-log-level=error --summary-interval=0 -o rom.zip "$ROM_URL"
+          aria2c -x 16 -s 16 -k 1M --console-log-level=error --summary-interval=0 -o rom_archive "$ROM_URL"
 
-          if unzip -l rom.zip | grep -q "payload.bin"; then
-            unzip -q -o rom.zip payload.bin
-            rm -f rom.zip
-            
+          file rom_archive
+
+          if 7z l rom_archive 2>/dev/null | grep -q "payload.bin"; then
+            7z e rom_archive "payload.bin" -r -y
+            rm -f rom_archive
             wget -q https://github.com/ssut/payload-dumper-go/releases/download/1.2.2/payload-dumper-go_1.2.2_linux_amd64.tar.gz -O pd.tar.gz
             tar -xzf pd.tar.gz payload-dumper-go
             chmod +x payload-dumper-go
             ./payload-dumper-go -p boot -o patchbootstock payload.bin
             rm -f payload.bin pd.tar.gz payload-dumper-go
-          elif unzip -l rom.zip | grep -q "boot.img"; then
-            unzip -q -j -o rom.zip "*boot.img" -d patchbootstock/
-            rm -f rom.zip
+          elif 7z l rom_archive 2>/dev/null | grep -E -q "boot\.img|boot\.img\.lz4"; then
+            7z e rom_archive "*boot.img*" -r -o"patchbootstock" -y
+            rm -f rom_archive
           else
             mkdir -p extracted_rom
-            unzip -q -o rom.zip -d extracted_rom
-            rm -f rom.zip
-            find extracted_rom -name "boot.img" -exec cp {} patchbootstock/boot.img \;
+            tar -xf rom_archive -C extracted_rom 2>/dev/null || 7z x rom_archive -o"extracted_rom" -y
+            rm -f rom_archive
+            find extracted_rom -name "boot.img*" -exec cp {} patchbootstock/ \;
             rm -rf extracted_rom
+          fi
+
+          if [ -f "patchbootstock/boot.img.lz4" ]; then
+            lz4 -d patchbootstock/boot.img.lz4 patchbootstock/boot.img
+            rm -f patchbootstock/boot.img.lz4
           fi
 
           if [ ! -f "patchbootstock/boot.img" ]; then
