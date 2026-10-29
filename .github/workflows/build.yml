@@ -12,9 +12,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
-      - name: Checkout Git LFS objects
-        run: git lfs pull
+        with:
+          lfs: true
 
       - name: Setup magiskboot (x86_64)
         run: |
