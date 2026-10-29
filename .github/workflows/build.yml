@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,41 +25,50 @@ jobs:
           sudo mv magiskboot /usr/local/bin/magiskboot
           magiskboot --version || echo "magiskboot ready"
 
-      - name: Download ROM and extract boot.img
+      - name: Clean split parts and Extract boot.img from ROM
         run: |
           mkdir -p work output patchbootstock
           
-          # مسح أي ملفات بوت مقسمة قديمة نهائياً من المستودع محلياً في سيرفر البناء
+          if ls patchbootstock/boot.img.part* 1> /dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git rm -f patchbootstock/boot.img.part*
+            git commit -m "Clean up split boot.img parts"
+            git push origin HEAD:${GITHUB_REF_NAME} || true
+          fi
           rm -rf patchbootstock/boot.img.part* patchbootstock/boot.img
-          
-          echo "⬇️ جاري تحميل ملف الروم الكامل..."
-          wget -O rom.zip "https://xm04.space/MyUrLiwlJzsOOD0BMz8GIywRNEEOFTAINBUpIzE/KzUOPDJBGyEELhsQMDUxIS0eGz8dLzE/Hx4OFQRBDjwfDDQ8Kw8bFQQeNBIuAA4KBCYzPC0wMQofHg4KHwwxED0kQh4HLycSIjgnAx0vJxIXFQMyNR8QMjUfDhEbCCwKMhwbEQAMOQoEJjwRLSM5FTQtLDA9JEIeBy8nEiI4JwMdLycSFxUDMjUfEDI1HzweB0EnAjlBBQMJEQ4CHUEnFh0vJxYaHCcDQi8nBD0gMSE9ATkVABwfIQdBGxUrChsWLSknEBcuGz8IOhwWCT8FAyceHxYUEScWKRM="
-          
-          echo "📦 جاري فك الروم واستخراج boot.img..."
-          # محاولة استخراج boot.zip أو boot.img مباشرة من الروم (سواء كان بصيغة zip أو payload.bin)
-          if unzip -l rom.zip | grep -q "boot.img"; then
-            unzip -o rom.zip boot.img -d patchbootstock/
-          elif unzip -l rom.zip | grep -q "payload.bin"; then
-            unzip -o rom.zip payload.bin
-            # لو الروم فيها payload.bin نقدر نستخرج منها الـ boot لو أمكن أو ندور عليها
-            echo "⚠️ الروم تحتوي على payload.bin"
-            # استخدام أداة payload-dumper لو متوفرة أو استخراج تقليدي
-            pip install payload-dumper-go
-            payload-dumper-go payload.bin
-            find . -name "boot.img" -exec cp {} patchbootstock/ \;
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq aria2 unzip tar
+
+          ROM_URL="https://xm04.space/MyUrLiwlJzsOOD0BMz8GIywRNEEOFTAINBUpIzE/KzUOPDJBGyEELhsQMDUxIS0eGz8dLzE/Hx4OFQRBDjwfDDQ8Kw8bFQQeNBIuAA4KBCYzPC0wMQofHg4KHwwxED0kQh4HLycSIjgnAx0vJxIXFQMyNR8QMjUfDhEbCCwKMhwbEQAMOQoEJjwRLSM5FTQtLDA9JEIeBy8nEiI4JwMdLycSFxUDMjUfEDI1HzweB0EnAjlBBQMJEQ4CHUEnFh0vJxYaHCcDQi8nBD0gMSE9ATkVABwfIQdBGxUrChsWLSknEBcuGz8IOhwWCT8FAyceHxYUEScWKRM="
+
+          aria2c -x 16 -s 16 -k 1M --console-log-level=error --summary-interval=0 -o rom.zip "$ROM_URL"
+
+          if unzip -l rom.zip | grep -q "payload.bin"; then
+            unzip -q -o rom.zip payload.bin
+            rm -f rom.zip
+            
+            wget -q https://github.com/ssut/payload-dumper-go/releases/download/1.2.2/payload-dumper-go_1.2.2_linux_amd64.tar.gz -O pd.tar.gz
+            tar -xzf pd.tar.gz payload-dumper-go
+            chmod +x payload-dumper-go
+            ./payload-dumper-go -p boot -o patchbootstock payload.bin
+            rm -f payload.bin pd.tar.gz payload-dumper-go
+          elif unzip -l rom.zip | grep -q "boot.img"; then
+            unzip -q -j -o rom.zip "*boot.img" -d patchbootstock/
+            rm -f rom.zip
           else
-            # بحث عام عن أي ملف بوت داخل الروم المفكوكة
-            unzip -o rom.zip -d extracted_rom
-            find extracted_rom -name "boot.img" -exec cp {} patchbootstock/ \;
+            mkdir -p extracted_rom
+            unzip -q -o rom.zip -d extracted_rom
+            rm -f rom.zip
+            find extracted_rom -name "boot.img" -exec cp {} patchbootstock/boot.img \;
+            rm -rf extracted_rom
           fi
-          
+
           if [ ! -f "patchbootstock/boot.img" ]; then
-            echo "❌ لم يتم العثور على ملف boot.img داخل الروم!"
             exit 1
-          else
-            echo "✅ تم استخراج ملف boot.img بنجاح وضعه في patchbootstock/"
           fi
-          
+
           ls -lh patchbootstock/boot.img
 
       - name: Patch boot.img with new kernel
@@ -64,22 +76,13 @@ jobs:
           cd work
           cp ../patchbootstock/boot.img boot.img
 
-          # فك boot.img الستوك
           magiskboot unpack boot.img
-
-          echo "=== محتويات بعد الفك ==="
           ls -lh
 
-          # نحط الـ Image الجديدة مباشرة
           cp ../Image kernel
-
-          echo "=== kernel الجديد ==="
           ls -lh kernel
 
-          # إعادة تجميع
           magiskboot repack boot.img patched_boot.img
-
-          echo "✅ patched_boot.img جاهز"
           ls -lh patched_boot.img
 
       - name: Verify patched boot.img
@@ -90,22 +93,17 @@ jobs:
 
           magiskboot unpack patched_boot.img
 
-          echo "=== التحقق من الـ patched boot ==="
           PATCH_SZ=$(stat -c%s kernel)
-          echo "KERNEL_SZ المعدل: $PATCH_SZ"
+          echo "KERNEL_SZ: $PATCH_SZ"
 
-          # فك الضغط ومقارنة بالـ Image الأصلي
           magiskboot decompress kernel kernel_raw 2>&1 || cp kernel kernel_raw
 
           ORIG_MD5=$(md5sum ../Image | awk '{print $1}')
           PATCH_MD5=$(md5sum kernel_raw | awk '{print $1}')
-          echo "MD5 Image الأصلي:   $ORIG_MD5"
-          echo "MD5 kernel المفكوك: $PATCH_MD5"
+          echo "ORIG_MD5:  $ORIG_MD5"
+          echo "PATCH_MD5: $PATCH_MD5"
 
-          if [ "$ORIG_MD5" = "$PATCH_MD5" ]; then
-            echo "✅ الكيرنال متطابق - التعديل صح"
-          else
-            echo "❌ الكيرنال مختلف - فيه مشكلة!"
+          if [ "$ORIG_MD5" != "$PATCH_MD5" ]; then
             exit 1
           fi
 
@@ -124,7 +122,6 @@ jobs:
           ZIP_NAME="AnyKernel3-patched-$(date +%Y%m%d-%H%M).zip"
           zip -r9 "../output/${ZIP_NAME}" .
           echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
-          echo "✅ ${ZIP_NAME} تم بنجاح"
 
       - name: Prepare output
         run: |
