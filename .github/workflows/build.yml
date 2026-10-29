@@ -13,6 +13,9 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Checkout Git LFS objects
+        run: git lfs pull
+
       - name: Setup magiskboot (x86_64)
         run: |
           MAGISK_URL="https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk"
